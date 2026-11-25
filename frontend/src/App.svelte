@@ -21,7 +21,11 @@
     ArrowRight,
     ZoomIn,
     ZoomOut,
-    RefreshCw
+    RefreshCw,
+    ListOrdered,
+    ArrowLeftRight,
+    Puzzle,
+    Navigation
   } from 'lucide-svelte';
   import confetti from 'canvas-confetti';
 
@@ -34,6 +38,7 @@
   let mockNearZone = false;
   let bypassGpsForDev = true;
   let activeStage = null;
+  let selectedPinId = 1;
   let searchQuery = '';
 
   // State สำหรับ CS-Style Roulette Gacha
@@ -43,10 +48,10 @@
   let rouletteOffset = 0;
   let rouletteContainerWidth = 320;
   let gachaReward = null;
-  const CARD_WIDTH = 96; // px
-  const CARD_GAP = 8; // px
-  const STEP_WIDTH = CARD_WIDTH + CARD_GAP; // 104px ต่อช่อง
-  const WIN_INDEX = 36; // ตำแหน่งช่องที่จะหยุด
+  const CARD_WIDTH = 96;
+  const CARD_GAP = 8;
+  const STEP_WIDTH = CARD_WIDTH + CARD_GAP;
+  const WIN_INDEX = 36;
 
   // State สำหรับมินิเกมแบบหลายข้อ
   let currentOrderSet = null;
@@ -71,7 +76,6 @@
   let currentShadowPuzzle = null;
   let gameFeedback = '';
 
-  // พูลของรางวัลกาชาแบ่งระดับความหายากสไตล์ CS Case
   const gachaPool = [
     {
       id: 'sticker',
@@ -114,6 +118,15 @@
       weight: 10
     }
   ];
+
+  // ตำแหน่งหมุด (%) บนกระดานแผนที่ expedition
+  const mapCoords = {
+    1: { x: 20, y: 76, badge: 'จุดที่ 1' },
+    2: { x: 74, y: 64, badge: 'จุดที่ 2' },
+    3: { x: 30, y: 46, badge: 'จุดที่ 3' },
+    4: { x: 76, y: 31, badge: 'จุดที่ 4' },
+    5: { x: 42, y: 15, badge: 'จุดที่ 5' }
+  };
 
   const fallbackStages = [
     {
@@ -173,7 +186,6 @@
     }
   ];
 
-  // คลังข้อ 1: เรียงลำดับวงจรชีวิต
   const orderQuestionBank = [
     {
       title: 'วงจรชีวิตของกล้วย',
@@ -204,7 +216,6 @@
     }
   ];
 
-  // คลังข้อ 2: ปัดซ้าย-ขวา จริงหรือมั่ว
   const swipeQuestionBank = [
     { statement: 'ลำต้นแท้จริงของกล้วยอยู่ใต้ดิน เรียกว่า "เหง้า"', isTrue: true },
     { statement: 'ต้นกล้วยจัดเป็นไม้ยืนต้นเนื้อแข็งที่มีวงปีเหมือนไม้สัก', isTrue: false },
@@ -213,7 +224,6 @@
     { statement: 'การเดินสำรวจพื้นที่โล่งช่วยให้นักท่องเที่ยวกระจายตัวไม่แออัดจุดเดียว', isTrue: true }
   ];
 
-  // คลังข้อ 3: ซูมส่องปริศนา
   const zoomQuestionBank = [
     {
       id: 'sunflower',
@@ -250,7 +260,6 @@
     }
   ];
 
-  // คลังข้อ 4: จับคู่ / ปรุงสูตร
   const matchQuestionBank = [
     {
       title: 'จับคู่พืชกับประโยชน์ใช้งาน',
@@ -270,7 +279,6 @@
     }
   ];
 
-  // คลังข้อ 5: ทายจากเงา
   const shadowQuestionBank = [
     {
       id: 'banana',
@@ -315,6 +323,7 @@
       s.gameLabel.toLowerCase().includes(searchQuery.toLowerCase())
   );
   $: canPlayCurrentStage = mockNearZone || bypassGpsForDev;
+  $: selectedMapStage = stages.find((s) => s.id === selectedPinId) || stages[0];
 
   onMount(async () => {
     try {
@@ -346,7 +355,6 @@
     return copy;
   }
 
-  // เสียงติ๊กสไตล์ CS Case Opening ด้วย Web Audio API
   let audioCtx = null;
   function playTickSound(isWin = false) {
     try {
@@ -369,9 +377,7 @@
       gain.connect(audioCtx.destination);
       osc.start();
       osc.stop(audioCtx.currentTime + (isWin ? 0.36 : 0.05));
-    } catch {
-      // ข้ามถ้าเบราว์เซอร์ยังไม่เปิดเสียง
-    }
+    } catch {}
   }
 
   function pickWeightedReward() {
@@ -408,24 +414,21 @@
     rouletteStrip = strip;
     rouletteOffset = 0;
 
-    // คำนวณจุดหยุดให้ตรงกลางเส้นสีเหลือง + สุ่มเยื้องเล็กน้อยในช่องให้ลุ้นเหมือน CS
     const randomJitter = (Math.random() - 0.5) * (CARD_WIDTH * 0.55);
     const centerOfViewport = rouletteContainerWidth / 2;
     const targetOffset = WIN_INDEX * STEP_WIDTH + CARD_WIDTH / 2 - centerOfViewport + randomJitter;
 
-    const duration = 5200; // 5.2 วินาที หมุนเร็วแล้วค่อย ๆ ช้าลง
+    const duration = 5200;
     const startTime = performance.now();
     let lastPassedIndex = -1;
 
     function animateFrame(now) {
       const elapsed = now - startTime;
       const t = Math.min(1, elapsed / duration);
-      // Quintic Ease-Out: พุ่งเร็วช่วงแรกแล้วหน่วงช้าลงเนียน ๆ ช่วงท้าย
       const eased = 1 - Math.pow(1 - t, 4.2);
 
       rouletteOffset = targetOffset * eased;
 
-      // ตรวจจับการไหลผ่านเส้นกลางเพื่อเล่นเสียงติ๊ก
       const currentCenterIndex = Math.floor((rouletteOffset + centerOfViewport) / STEP_WIDTH);
       if (currentCenterIndex !== lastPassedIndex) {
         lastPassedIndex = currentCenterIndex;
@@ -477,6 +480,8 @@
   }
 
   function openStage(stage) {
+    if (!stage) return;
+    selectedPinId = stage.id;
     activeStage = stage;
     setupMiniGameForStage(stage.gameType);
   }
@@ -484,6 +489,10 @@
   function completeStage(stageId) {
     if (!clearedIds.includes(stageId)) {
       clearedIds = [...clearedIds, stageId];
+      const nextStage = stages.find((s) => !clearedIds.includes(s.id));
+      if (nextStage) {
+        selectedPinId = nextStage.id;
+      }
       if (clearedIds.length === 5) {
         confetti({ particleCount: 110, spread: 75, origin: { y: 0.6 } });
       }
@@ -593,6 +602,7 @@
     gachaReward = null;
     showGachaModal = false;
     activeStage = null;
+    selectedPinId = 1;
   }
 </script>
 
@@ -676,7 +686,7 @@
               on:click={() => (activeScreen = 'expedition')}
               class="text-xs font-black text-sky-700 hover:underline cursor-pointer"
             >
-              ดูครบ 5 ด่าน
+              ดูแผนที่ 5 ด่าน
             </button>
           </div>
 
@@ -691,7 +701,7 @@
           </div>
         </div>
 
-        <!-- การ์ดด่าน 1-4 -->
+        <!-- การ์ดด่าน 1-4 (มีเงาไอคอนใบ้ + แสตมป์ทับการ์ด) -->
         <div class="mt-5 grid grid-cols-2 gap-3.5">
           {#each filteredStages.slice(0, 4) as stage}
             {@const isCleared = clearedIds.includes(stage.id)}
@@ -708,21 +718,45 @@
                 </span>
 
                 <div
-                  class="relative z-10 flex-1 h-24 rounded-[24px] bg-gradient-to-b {stage.clayPadGrad} p-3 shadow-[0_10px_20px_rgba(15,23,42,0.1),inset_0_4px_7px_rgba(255,255,255,0.85),inset_0_-5px_10px_rgba(15,23,42,0.08)] flex flex-col justify-between group-hover:scale-[1.03] active:scale-95 transition"
+                  class="relative z-10 flex-1 h-24 rounded-[24px] bg-gradient-to-b {stage.clayPadGrad} p-3 shadow-[0_10px_20px_rgba(15,23,42,0.1),inset_0_4px_7px_rgba(255,255,255,0.85),inset_0_-5px_10px_rgba(15,23,42,0.08)] flex flex-col justify-between overflow-hidden group-hover:scale-[1.03] active:scale-95 transition"
                 >
-                  <div class="flex items-center justify-between">
+                  <div class="pointer-events-none absolute -right-2 -bottom-2 text-slate-950/12 -rotate-12 transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
+                    {#if stage.gameType === 'order'}
+                      <ListOrdered class="w-16 h-16 stroke-[2.4]" />
+                    {:else if stage.gameType === 'swipe'}
+                      <ArrowLeftRight class="w-16 h-16 stroke-[2.4]" />
+                    {:else if stage.gameType === 'zoom'}
+                      <Search class="w-16 h-16 stroke-[2.4]" />
+                    {:else if stage.gameType === 'match'}
+                      <Puzzle class="w-16 h-16 stroke-[2.4]" />
+                    {:else}
+                      <Leaf class="w-16 h-16 stroke-[2.4]" />
+                    {/if}
+                  </div>
+
+                  <div class="relative z-10 flex items-center justify-between">
                     <span class="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-white/90 text-slate-900 shadow-xs">
                       {isCleared ? 'ปั๊มแล้ว ✓' : 'กดเล่น'}
                     </span>
-                    {#if isCleared}
-                      <Check class="w-3.5 h-3.5 text-emerald-800" />
-                    {:else}
+                    {#if !isCleared}
                       <Leaf class="w-3.5 h-3.5 text-slate-700/75" />
                     {/if}
                   </div>
-                  <div class="text-[11px] font-extrabold text-slate-900 leading-tight line-clamp-2">
+
+                  <div class="relative z-10 text-[11px] font-extrabold text-slate-900 leading-tight line-clamp-2 pr-5">
                     {stage.gameLabel}
                   </div>
+
+                  {#if isCleared}
+                    <div
+                      class="pointer-events-none absolute -right-1.5 -top-1.5 z-20 w-13 h-13 rounded-full bg-gradient-to-b from-[#FFFDF7] to-[#FEF3C7] border-[2.5px] border-dashed border-emerald-700/80 shadow-[0_6px_14px_rgba(6,78,59,0.25),inset_0_2px_4px_rgba(255,255,255,0.95)] rotate-12 flex flex-col items-center justify-center text-center px-1"
+                    >
+                      <Check class="w-3.5 h-3.5 text-emerald-700 stroke-[3]" />
+                      <span class="text-[8px] font-black text-emerald-900 leading-tight line-clamp-1 mt-0.5">
+                        {stage.stampName}
+                      </span>
+                    </div>
+                  {/if}
                 </div>
               </div>
 
@@ -842,113 +876,187 @@
         </div>
       </div>
 
-    <!-- ================= หน้า 3: CLAY EXPEDITION (ครบ 5 ด่าน + กาชา + Rebirth) ================= -->
+    <!-- ================= หน้า 3: CLAY EXPEDITION MAP (แผนที่เส้นทางสำรวจ Responsive) ================= -->
     {:else}
-      <div class="px-6 pt-6 pb-28 flex-1 flex flex-col">
-        <div class="flex items-center justify-between">
-          <div class="w-11 h-11 rounded-[18px] bg-white shadow-[0_8px_16px_rgba(15,23,42,0.08),inset_0_3px_5px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.6)] flex items-center justify-center">
-            <MapPin class="w-4 h-4 text-emerald-600" />
+      <div class="px-4 sm:px-6 pt-5 pb-28 flex-1 flex flex-col">
+        <!-- แถบด้านบนของหน้าแผนที่ (ไม่บีบปุ่มและหัวข้อจนแตกบรรทัด) -->
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-10 h-10 rounded-[18px] bg-white shadow-[0_8px_16px_rgba(15,23,42,0.08),inset_0_3px_5px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.6)] flex items-center justify-center shrink-0">
+              <MapPin class="w-4 h-4 text-emerald-600" />
+            </div>
+            <div class="min-w-0">
+              <h1 class="text-base sm:text-xl font-black tracking-tight text-slate-900 leading-none uppercase truncate">
+                BOTANIC MAP
+              </h1>
+              <p class="text-[11px] font-extrabold text-slate-700 mt-1 truncate">
+                5 จุดพื้นที่โล่ง • เกจ {progressPercent}%
+              </p>
+            </div>
           </div>
 
           <button
             type="button"
             on:click={() => (bypassGpsForDev = !bypassGpsForDev)}
-            class="px-3.5 py-2 rounded-[18px] text-[10px] font-extrabold transition cursor-pointer active:scale-95 {bypassGpsForDev
+            class="px-3 py-2 rounded-[18px] text-[10px] sm:text-xs font-extrabold whitespace-nowrap shrink-0 transition cursor-pointer active:scale-95 {bypassGpsForDev
               ? 'bg-gradient-to-b from-[#4ADE80] to-[#16A34A] text-white shadow-[0_6px_14px_rgba(22,163,74,0.28),inset_0_2px_4px_rgba(255,255,255,0.65),inset_0_-3px_6px_rgba(21,128,61,0.35)]'
               : 'bg-white text-slate-800 shadow-[0_6px_14px_rgba(15,23,42,0.07),inset_0_2px_4px_rgba(255,255,255,1),inset_0_-3px_6px_rgba(203,213,225,0.6)]'}"
           >
-            {bypassGpsForDev ? 'เทสต์เล่นได้ทันที ✓' : 'โหมดเช็กจุด'}
+            {bypassGpsForDev ? 'เทสต์อิสระ ✓' : 'โหมดเช็กจุด'}
           </button>
         </div>
 
-        <div class="mt-4 text-center">
-          <h1 class="text-[42px] font-black tracking-tighter text-slate-900 leading-none uppercase drop-shadow-[0_3px_0_rgba(255,255,255,0.75)]">
-            EXPEDITION
-          </h1>
-          <p class="mt-1 text-xs font-extrabold text-slate-600">
-            เลือกเล่นด่านไหนก่อนก็ได้ • ครบ 5 ด่านเปิดกาชา
-          </p>
-        </div>
+        <!-- กระดานแผนที่ดินปั้น (Clay Map Canvas Responsive) -->
+        <div class="mt-3.5 relative min-h-[290px] sm:min-h-[330px] flex-1 w-full rounded-[32px] bg-gradient-to-b from-[#D9F99D] via-[#ECFCCB] to-[#E0F2FE] shadow-[0_14px_28px_rgba(15,23,42,0.1),inset_0_4px_8px_rgba(255,255,255,0.9),inset_0_-6px_12px_rgba(132,204,22,0.25)] border border-white/80 overflow-hidden">
+          <!-- แปลงพื้นที่ดินปั้นตกแต่งพื้นแผนที่ -->
+          <div class="pointer-events-none absolute -left-8 -top-8 w-36 h-36 rounded-[44px] bg-[#FEF08A]/55 rotate-12 shadow-[inset_0_3px_6px_rgba(255,255,255,0.8)]"></div>
+          <div class="pointer-events-none absolute -right-6 bottom-6 w-32 h-32 rounded-[40px] bg-[#A7F3D0]/55 -rotate-12 shadow-[inset_0_3px_6px_rgba(255,255,255,0.8)]"></div>
+          <div class="pointer-events-none absolute left-10 bottom-3 w-28 h-16 rounded-full bg-[#BAE6FD]/65"></div>
 
-        <div class="mt-4 rounded-[26px] bg-white/95 p-4 shadow-[0_12px_24px_rgba(15,23,42,0.08),inset_0_4px_7px_rgba(255,255,255,1),inset_0_-5px_10px_rgba(203,213,225,0.5)] space-y-2">
-          <div class="flex items-center justify-between text-xs font-black">
-            <span>เกจความคืบหน้า</span>
-            <span>{progressPercent}% ({clearedIds.length}/5)</span>
-          </div>
-          <div class="w-full h-3.5 rounded-full bg-slate-100 shadow-[inset_0_3px_6px_rgba(148,163,184,0.45)] overflow-hidden p-0.5">
-            <div
-              class="h-full rounded-full bg-gradient-to-r from-[#86EFAC] to-[#22C55E] shadow-[inset_0_2px_3px_rgba(255,255,255,0.7)] transition-all duration-500"
-              style="width: {progressPercent}%"
-            ></div>
-          </div>
-        </div>
+          <!-- ป้ายชื่อโซนบนแผนที่ (ไม่ให้หมุด 5 ทับ) -->
+          <span class="pointer-events-none absolute top-3 left-3 z-20 px-2.5 py-1 rounded-full bg-white/95 text-[10px] font-black text-emerald-950 shadow-xs whitespace-nowrap">
+            🌿 พื้นที่โล่งกลางแจ้ง
+          </span>
 
-        <div class="mt-4 space-y-2.5">
-          {#each stages as stage}
-            {@const isCleared = clearedIds.includes(stage.id)}
-            <button
-              type="button"
-              on:click={() => openStage(stage)}
-              class="w-full text-left rounded-[22px] bg-white/95 hover:bg-white p-3 shadow-[0_9px_18px_rgba(15,23,42,0.06),inset_0_3px_6px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.5)] flex items-center justify-between gap-3 transition active:scale-[0.99] cursor-pointer"
-            >
-              <div class="flex items-center gap-3 min-w-0">
+          <!-- เส้นทางเดินเชื่อมต่อหมุดทั้ง 5 จุด -->
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="pointer-events-none absolute inset-0 w-full h-full">
+            <polyline
+              points="20,78 76,66 28,48 76,34 46,20"
+              fill="none"
+              stroke="#FFFFFF"
+              stroke-width="4.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              opacity="0.92"
+            />
+            <polyline
+              points="20,78 76,66 28,48 76,34 46,20"
+              fill="none"
+              stroke="#15803D"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-dasharray="3.2 2.8"
+            />
+          </svg>
+
+          <!-- หมุดสำรวจทั้ง 5 จุดบนแผนที่ -->
+          {#each [
+            { id: 1, x: 20, y: 78, badge: 'จุดที่ 1' },
+            { id: 2, x: 76, y: 66, badge: 'จุดที่ 2' },
+            { id: 3, x: 28, y: 48, badge: 'จุดที่ 3' },
+            { id: 4, x: 76, y: 34, badge: 'จุดที่ 4' },
+            { id: 5, x: 46, y: 20, badge: 'จุดที่ 5' }
+          ] as pin}
+            {@const stage = stages.find((s) => s.id === pin.id)}
+            {#if stage}
+              {@const isCleared = clearedIds.includes(stage.id)}
+              {@const isSelected = selectedPinId === stage.id}
+
+              <button
+                type="button"
+                on:click={() => (selectedPinId = stage.id)}
+                style="left: {pin.x}%; top: {pin.y}%;"
+                class="-translate-x-1/2 -translate-y-1/2 absolute z-10 flex flex-col items-center group cursor-pointer focus:outline-none"
+              >
                 <div
-                  class="w-10 h-10 rounded-[16px] flex items-center justify-center shrink-0 font-black text-xs {isCleared
-                    ? 'bg-gradient-to-b from-[#BEF264] to-[#65A30D] text-slate-950 shadow-[inset_0_2px_4px_rgba(255,255,255,0.75)]'
-                    : 'bg-gradient-to-b from-[#334155] to-[#0F172A] text-white shadow-[inset_0_2px_4px_rgba(255,255,255,0.25)]'}"
+                  class="relative w-10 h-10 sm:w-11 sm:h-11 rounded-[16px] sm:rounded-[18px] flex items-center justify-center font-black text-xs transition-all duration-200 {isCleared
+                    ? 'bg-gradient-to-b from-[#4ADE80] to-[#16A34A] text-white shadow-[0_8px_16px_rgba(22,163,74,0.35),inset_0_3px_5px_rgba(255,255,255,0.75)]'
+                    : isSelected
+                    ? 'bg-gradient-to-b from-[#FDE047] to-[#F59E0B] text-slate-950 scale-110 shadow-[0_10px_20px_rgba(245,158,11,0.38),inset_0_3px_5px_rgba(255,255,255,0.85)]'
+                    : 'bg-white text-slate-900 shadow-[0_8px_16px_rgba(15,23,42,0.14),inset_0_3px_5px_rgba(255,255,255,1),inset_0_-4px_7px_rgba(203,213,225,0.65)] group-hover:scale-105'}"
                 >
-                  {isCleared ? '✓' : stage.id}
-                </div>
-                <div class="min-w-0">
-                  <div class="text-xs font-black text-slate-900 truncate">
-                    {isCleared ? stage.zone : `เงาดำปริศนา #${stage.id}`}
-                  </div>
-                  <div class="text-[11px] font-bold text-slate-500 truncate">
-                    {isCleared ? `แสตมป์: ${stage.stampName}` : stage.gameLabel}
-                  </div>
-                </div>
-              </div>
+                  {#if isCleared}
+                    <Check class="w-4 h-4 sm:w-5 sm:h-5 stroke-[3]" />
+                  {:else}
+                    <span>{stage.id}</span>
+                  {/if}
 
-              <span class="text-[11px] font-black px-3 py-1 rounded-full shrink-0 {isCleared
-                ? 'bg-lime-200 text-slate-900'
-                : 'bg-gradient-to-b from-[#FEF08A] to-[#FACC15] text-slate-900 shadow-[inset_0_2px_3px_rgba(255,255,255,0.8)]'}">
-                {isCleared ? 'เล่นซ้ำ' : 'เริ่มเกม'}
-              </span>
-            </button>
+                  {#if isCleared}
+                    <span class="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-amber-300 border border-white text-[9px] font-black text-slate-950 flex items-center justify-center shadow-xs">
+                      ★
+                    </span>
+                  {/if}
+                </div>
+
+                <span class="mt-1 px-2 py-0.5 rounded-full text-[9px] font-black shadow-xs whitespace-nowrap {isSelected
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white/95 text-slate-800'}">
+                  {isCleared ? stage.stampName : pin.badge}
+                </span>
+              </button>
+            {/if}
           {/each}
         </div>
 
-        <div class="mt-4 flex gap-2.5">
+        <!-- การ์ดรายละเอียดจุดที่เลือกบนแผนที่ -->
+        {#if selectedMapStage}
+          {@const pinCleared = clearedIds.includes(selectedMapStage.id)}
+          <div class="mt-3 rounded-[26px] bg-white/95 p-3.5 shadow-[0_12px_24px_rgba(15,23,42,0.08),inset_0_3px_6px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.55)] flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap {pinCleared
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-amber-100 text-amber-900'}">
+                  {pinCleared ? `ได้ตรา: ${selectedMapStage.stampName}` : `จุดที่ ${selectedMapStage.id}`}
+                </span>
+                <span class="text-[10px] font-extrabold text-slate-500 truncate">
+                  {selectedMapStage.gameLabel}
+                </span>
+              </div>
+              <div class="text-sm font-black text-slate-900 truncate mt-1">
+                {pinCleared ? selectedMapStage.zone : `เงาปริศนาจุดที่ ${selectedMapStage.id}`}
+              </div>
+              <div class="text-[11px] font-bold text-slate-500 truncate">
+                {selectedMapStage.subtitle} • +20%
+              </div>
+            </div>
+
+            <button
+              type="button"
+              on:click={() => openStage(selectedMapStage)}
+              class="px-3.5 py-2.5 rounded-[18px] bg-gradient-to-b from-[#4ADE80] to-[#16A34A] text-white font-black text-xs whitespace-nowrap shadow-[0_6px_14px_rgba(22,163,74,0.28),inset_0_2px_4px_rgba(255,255,255,0.65)] flex items-center gap-1 shrink-0 active:scale-95 cursor-pointer"
+            >
+              <Navigation class="w-3.5 h-3.5" />
+              {pinCleared ? 'เล่นซ้ำ' : 'เริ่มด่าน'}
+            </button>
+          </div>
+        {/if}
+
+        <!-- ปุ่มเปิดกาชา + Rebirth -->
+        <div class="mt-3 flex gap-2">
           <button
             type="button"
             disabled={progressPercent < 100}
             on:click={openGachaRoulette}
-            class="flex-1 py-3 rounded-[22px] font-black text-xs flex items-center justify-center gap-1.5 transition {progressPercent >= 100
+            class="flex-1 py-3 px-3 rounded-[22px] font-black text-xs flex items-center justify-center gap-1.5 whitespace-nowrap transition {progressPercent >= 100
               ? 'bg-gradient-to-b from-[#FDE047] to-[#F59E0B] text-slate-950 shadow-[0_10px_20px_rgba(245,158,11,0.3),inset_0_3px_5px_rgba(255,255,255,0.8),inset_0_-4px_8px_rgba(180,83,9,0.3)] active:scale-95 cursor-pointer'
-              : 'bg-white/70 text-slate-400 shadow-[inset_0_2px_5px_rgba(148,163,184,0.35)] cursor-not-allowed'}"
+              : 'bg-white/80 text-slate-500 shadow-[inset_0_2px_5px_rgba(148,163,184,0.35)] cursor-not-allowed'}"
           >
-            <Sparkles class="w-4 h-4" />
-            {progressPercent >= 100 ? 'เปิดกล่องกาชา' : `เติมเกจอีก ${100 - progressPercent}% เพื่อเปิดกาชา`}
+            <Sparkles class="w-4 h-4 shrink-0" />
+            <span class="truncate">
+              {progressPercent >= 100 ? 'เปิดกล่องกาชา' : `เกจ ${progressPercent}% (ครบ 100% เปิดกาชา)`}
+            </span>
           </button>
 
           <button
             type="button"
             on:click={resetRound}
-            class="px-4 py-3 rounded-[22px] bg-white text-slate-900 font-black text-xs shadow-[0_8px_16px_rgba(15,23,42,0.08),inset_0_3px_5px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.55)] active:scale-95 cursor-pointer"
+            class="px-3.5 py-3 rounded-[22px] bg-white text-slate-900 font-black text-xs whitespace-nowrap shrink-0 shadow-[0_8px_16px_rgba(15,23,42,0.08),inset_0_3px_5px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.55)] active:scale-95 cursor-pointer"
           >
             Rebirth
           </button>
         </div>
 
         {#if gachaReward}
-          <div class="mt-2.5 rounded-[20px] bg-gradient-to-b from-[#34D399] to-[#059669] text-white px-3.5 py-2.5 text-xs font-extrabold text-center shadow-[0_8px_18px_rgba(5,150,105,0.28),inset_0_2px_4px_rgba(255,255,255,0.65)]">
+          <div class="mt-2 rounded-[20px] bg-gradient-to-b from-[#34D399] to-[#059669] text-white px-3.5 py-2 text-xs font-extrabold text-center shadow-[0_8px_18px_rgba(5,150,105,0.28),inset_0_2px_4px_rgba(255,255,255,0.65)]">
             รางวัลรอบนี้: {gachaReward.emoji} {gachaReward.name}
           </div>
         {/if}
       </div>
     {/if}
 
-    <!-- ================= แถบเมนูด้านล่าง (เฉพาะปุ่มที่ใช้งานได้จริง) ================= -->
+    <!-- ================= แถบเมนูด้านล่าง ================= -->
     <div class="absolute bottom-5 left-0 right-0 px-6 flex items-center justify-between z-30">
       <div class="flex items-center bg-white rounded-full p-1.5 shadow-[0_12px_24px_rgba(15,23,42,0.12),inset_0_3px_6px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(203,213,225,0.6)]">
         <button
@@ -965,7 +1073,7 @@
         <button
           type="button"
           on:click={() => (activeScreen = 'expedition')}
-          title="5 ด่านสำรวจ"
+          title="แผนที่สำรวจ"
           class="w-10 h-10 rounded-full flex items-center justify-center transition cursor-pointer {activeScreen === 'expedition'
             ? 'bg-gradient-to-b from-[#4ADE80] to-[#16A34A] text-white shadow-[inset_0_2px_4px_rgba(255,255,255,0.6)]'
             : 'text-slate-600 hover:bg-slate-100'}"
@@ -977,7 +1085,7 @@
       <button
         type="button"
         on:click={() => (activeScreen = 'expedition')}
-        title="รายการภารกิจทั้งหมด"
+        title="แผนที่ภารกิจ"
         class="w-13 h-13 rounded-full bg-gradient-to-b from-[#334155] to-[#0F172A] text-white shadow-[0_12px_24px_rgba(15,23,42,0.28),inset_0_3px_6px_rgba(255,255,255,0.3)] flex items-center justify-center hover:scale-105 active:scale-95 transition cursor-pointer"
       >
         <LayoutGrid class="w-5 h-5" />
@@ -1017,12 +1125,10 @@
             </button>
           </div>
 
-          <!-- รางหมุนแนวนอน + เส้นขีดสีทองตรงกลางแบบ Counter-Strike -->
           <div
             bind:clientWidth={rouletteContainerWidth}
             class="relative h-36 rounded-[24px] bg-slate-950/90 border-2 border-amber-400/40 overflow-hidden flex items-center shadow-[inset_0_6px_20px_rgba(0,0,0,0.85)]"
           >
-            <!-- แถบการ์ดรางวัลวิ่งแนวนอน -->
             <div
               class="flex items-center will-change-transform"
               style="gap: {CARD_GAP}px; transform: translate3d(-{rouletteOffset}px, 0, 0);"
@@ -1041,24 +1147,20 @@
                   <span class="text-[10px] font-extrabold text-slate-900 text-center leading-tight line-clamp-2">
                     {item.name}
                   </span>
-                  <!-- แถบสีความหายากด้านล่างการ์ดเหมือน CS -->
                   <div class="absolute bottom-0 left-0 right-0 h-1.5 {item.barColor}"></div>
                 </div>
               {/each}
             </div>
 
-            <!-- เงาไล่ระดับซ้าย-ขวาให้ดูมีมิติโค้ง -->
             <div class="pointer-events-none absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-slate-950 to-transparent z-10"></div>
             <div class="pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-slate-950 to-transparent z-10"></div>
 
-            <!-- เส้นขีดสีทองตรงกลาง (Indicator Line) -->
             <div class="pointer-events-none absolute inset-y-0 left-1/2 -translate-x-1/2 w-[3px] bg-amber-400 shadow-[0_0_12px_#facc15] z-20">
               <div class="w-3 h-3 rotate-45 bg-amber-400 -ml-[4.5px] -mt-1.5"></div>
               <div class="w-3 h-3 rotate-45 bg-amber-400 -ml-[4.5px] absolute bottom-0 -mb-1.5"></div>
             </div>
           </div>
 
-          <!-- ผลลัพธ์หลังหยุดหมุน -->
           {#if isSpinning}
             <div class="text-center py-2 text-xs font-extrabold text-amber-300 animate-pulse">
               กำลังเปิดกล่อง... ลุ้นรางวัลตรงเส้นสีทอง!
